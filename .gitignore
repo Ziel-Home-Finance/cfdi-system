@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-*/
+.env
+.env.*
+!.env.example
+*.local
+*.log
+vite.config.js.timestamp-*.mjs
+sat-backend/bin/
+sat-backend/obj/
+sat-backend/artifacts/
+supabase/.temp/
+.DS_Store
