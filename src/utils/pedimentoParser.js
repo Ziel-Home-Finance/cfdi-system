@@ -136,19 +136,41 @@ function parseFields(text, fileName) {
   if (rfcMatch) rfc = clean(rfcMatch[1]).toUpperCase()
 
   // ── 3-7. CUADRO DE LIQUIDACION ──
-  // Find the section between CUADRO heading and DEPOSITO marker
+  // CUADRO table structure (per row): LABEL ... rate ... amount
+  // We must take the LAST number → amount, NOT the first → rate.
+  const CUADRO_END_MARKERS = ['DEPOSITO REFERENCIADO', 'DEPÓSITO REFERENCIADO',
+    '***PAGO', 'CODIGO DE BARRAS', 'DATOS DEL PROVEEDOR']
+  const CUADRO_LABELS = ['DTA', 'IVA/PRV', 'IGI/IGE', 'IGI', 'IVA', 'PRV']
+
+  /**
+   * Extract amount for one CUADRO line item.
+   * In a CUADRO row the last number after the label is the amount (rate comes first).
+   * We look from labelPos to the next label (or TOTAL) and take the last number.
+   */
+  function extractCuadroItem(text, label, labelPos) {
+    const start = labelPos + label.length
+    let endIdx = text.length
+    for (const other of [...CUADRO_LABELS, 'TOTAL']) {
+      if (other === label) continue
+      const oi = text.indexOf(other, start)
+      if (oi >= start && oi < endIdx) endIdx = oi
+    }
+    const section = text.slice(start, endIdx)
+    const nums = [...section.matchAll(/[\d,]+(?:\.\d{1,2})?/g)].map(m => numVal(m[0]))
+    // Last number = amount (rate/percentage comes first, then the monetary value)
+    return nums.length > 0 ? nums[nums.length - 1] : 0
+  }
+
+  // Build cuadro / tasas text
   let cuadro = ''
   const ci = oneLine.indexOf('CUADRO DE LIQUIDACION')
   if (ci >= 0) {
     cuadro = oneLine.slice(ci, ci + 2000)
-    const endMarkers = ['DEPOSITO REFERENCIADO', 'DEPÓSITO REFERENCIADO',
-      '***PAGO', 'CODIGO DE BARRAS', 'DATOS DEL PROVEEDOR']
-    for (const em of endMarkers) {
+    for (const em of CUADRO_END_MARKERS) {
       const ei = cuadro.indexOf(em)
       if (ei > 50) { cuadro = cuadro.slice(0, ei); break }
     }
   }
-  // Also search in TASAS section (format 6002857 places amounts after TASAS)
   let tasasSection = ''
   const ti = oneLine.indexOf('TASAS A NIVEL PEDIMENTO')
   if (ti >= 0) {
@@ -156,7 +178,7 @@ function parseFields(text, fileName) {
   }
   const taxText = tasasSection || cuadro
 
-  // TOTAL: find in CUADRO, after TOTAL label
+  // TOTAL
   let total = 0
   if (cuadro) {
     total = findNumInRange(cuadro, cuadro.indexOf('TOTAL') + 5, 100, 1000)
@@ -165,27 +187,42 @@ function parseFields(text, fileName) {
     total = findNumInRange(tasasSection, tasasSection.lastIndexOf('TOTAL') + 5, 100, 1000)
   }
 
-  // IVA (standalone, not IVA/PRV)
-  let iva = 0
-  if (taxText) {
-    // Find ALL standalone "IVA" occurrences (not followed by /PRV)
-    const ivaMatches = [...taxText.matchAll(/\bIVA\b(?!\s*\/\s*PRV)/gi)]
-    // Use the last one (typically the import IVA row)
-    for (let i = ivaMatches.length - 1; i >= 0; i--) {
-      const val = findNumInRange(taxText, ivaMatches[i].index + 3, 300, 10)
-      if (val > 0) { iva = val; break }
-    }
-  }
+  // DTA
+  let dta = 0
+  const dtaIdx = taxText.indexOf('DTA')
+  if (dtaIdx >= 0) dta = extractCuadroItem(taxText, 'DTA', dtaIdx)
 
   // IVA/PRV
-  let ivaPrv = findTaxAmount(taxText, 'IVA/PRV')
+  let ivaPrv = 0
+  const ivaPrvIdx = taxText.indexOf('IVA/PRV')
+  if (ivaPrvIdx >= 0) ivaPrv = extractCuadroItem(taxText, 'IVA/PRV', ivaPrvIdx)
 
-  // IGI/IGE or IGI
-  let tariff = findTaxAmount(taxText, 'IGI/IGE')
-  if (!tariff) tariff = findTaxAmount(taxText, 'IGI')
+  // IGI (try IGI/IGE first, then IGI alone)
+  let igi = 0
+  let igiIdx = taxText.indexOf('IGI/IGE')
+  if (igiIdx >= 0) {
+    igi = extractCuadroItem(taxText, 'IGI/IGE', igiIdx)
+  } else {
+    igiIdx = taxText.indexOf('IGI')
+    if (igiIdx >= 0) igi = extractCuadroItem(taxText, 'IGI', igiIdx)
+  }
 
-  // DTA
-  let dta = findTaxAmount(taxText, 'DTA')
+  // Standalone IVA (exclude IVA/PRV) — last occurrence is the import VAT
+  let iva = 0
+  const ivaMatches = [...taxText.matchAll(/\bIVA\b(?!\s*\/\s*PRV)/gi)]
+  if (ivaMatches.length > 0) {
+    const lastIva = ivaMatches[ivaMatches.length - 1]
+    iva = extractCuadroItem(taxText, 'IVA', lastIva.index)
+  }
+
+  // PRV (standalone — skip the PRV substring inside IVA/PRV)
+  let prv = 0
+  const prvSearchStart = ivaPrvIdx >= 0
+    ? taxText.indexOf('PRV', ivaPrvIdx + 7)  // skip past "IVA/PRV"
+    : taxText.indexOf('PRV')
+  if (prvSearchStart >= 0) {
+    prv = extractCuadroItem(taxText, 'PRV', prvSearchStart)
+  }
 
   // ── 8-9. FECHA DE PAGO → Period ──
   // Find payment section (post-PAGO ELECTRONICO)
@@ -369,8 +406,8 @@ function parseFields(text, fileName) {
     operation_type: opType || 'Importación',
     entry_date: entryDate,
     customs_value: total,
-    iva_amount: iva,
-    tariff_amount: tariff,
+    iva_amount: iva,        // 税额 = standalone IVA (import VAT), same logic as XML invoice tax amount
+    tariff_amount: igi,     // IGI (关税)
     file_name: fileName,
     raw_text: oneLine,
     parse_status: parseStatus,
@@ -381,8 +418,10 @@ function parseFields(text, fileName) {
     id_fiscal: idFiscal,
     domicilio: domicilio.slice(0, 500),
     pais: pais,
-    vat_of_prv: ivaPrv,
-    dta_amount: dta,
+    dta: dta,               // DTA (海关手续费)
+    iva_prv: ivaPrv,        // IVA/PRV
+    igi: igi,                // IGI (关税, same as tariff_amount)
+    prv: prv,                // PRV
     custom_agency: customAgency,
     internal_ref: internalRef,
   }

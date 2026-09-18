@@ -32,7 +32,16 @@
     <el-card v-if="records.length" shadow="never">
       <div class="result-header">
         <h3>解析结果（{{ records.length }} 条）</h3>
-        <el-button type="primary" :loading="saving" @click="saveAll">确认入库</el-button>
+        <div class="result-actions">
+          <el-popover placement="bottom" :width="220" trigger="click">
+            <template #reference><el-button size="small">列设置</el-button></template>
+            <el-checkbox-group v-model="visibleCols" size="small">
+              <el-checkbox v-for="k in allColKeys" :key="k" :label="k" :disabled="getColDisabled(k)">{{ colLabels[k] }}</el-checkbox>
+            </el-checkbox-group>
+            <div style="margin-top:8px"><el-button size="small" type="primary" text @click="resetCols">恢复默认</el-button></div>
+          </el-popover>
+          <el-button type="primary" :loading="saving" @click="saveAll">确认入库</el-button>
+        </div>
       </div>
       <el-table :data="records" border stripe size="small" max-height="520">
         <el-table-column prop="pedimento_number" label="关单号" min-width="170" />
@@ -48,14 +57,20 @@
         <el-table-column prop="customs_value" label="完税总额" width="120" align="right">
           <template #default="{ row }">{{ formatMoney(row.customs_value) }}</template>
         </el-table-column>
-        <el-table-column prop="iva_amount" label="进口 IVA" width="120" align="right">
+        <el-table-column v-if="visibleCols.includes('iva_amount')" prop="iva_amount" label="税额" width="120" align="right">
           <template #default="{ row }"><strong>{{ formatMoney(row.iva_amount) }}</strong></template>
         </el-table-column>
-        <el-table-column prop="vat_of_prv" label="PRV IVA" width="110" align="right">
-          <template #default="{ row }">{{ formatMoney(row.vat_of_prv) }}</template>
+        <el-table-column v-if="visibleCols.includes('dta')" prop="dta" label="DTA" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.dta) }}</template>
         </el-table-column>
-        <el-table-column prop="tariff_amount" label="关税(IGI)" width="110" align="right">
-          <template #default="{ row }">{{ formatMoney(row.tariff_amount) }}</template>
+        <el-table-column v-if="visibleCols.includes('iva_prv')" prop="iva_prv" label="IVA/PRV" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.iva_prv) }}</template>
+        </el-table-column>
+        <el-table-column v-if="visibleCols.includes('igi')" prop="igi" label="IGI" width="120" align="right">
+          <template #default="{ row }">{{ formatMoney(row.igi) }}</template>
+        </el-table-column>
+        <el-table-column v-if="visibleCols.includes('prv')" prop="prv" label="PRV" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.prv) }}</template>
         </el-table-column>
         <el-table-column prop="parse_status" label="状态" width="85" align="center">
           <template #default="{ row }"><el-tag :type="row.parse_status === 'parsed' ? 'success' : 'warning'" size="small">{{ row.parse_status === 'parsed' ? '已识别' : '需核对' }}</el-tag></template>
@@ -83,6 +98,19 @@ const errors = ref([])
 const parsing = ref(false)
 const saving = ref(false)
 const progress = ref(0)
+
+// ── Column visibility config ──
+const allColKeys = ['iva_amount', 'dta', 'iva_prv', 'igi', 'prv']
+const colLabels = { iva_amount: '税额', dta: 'DTA', iva_prv: 'IVA/PRV', igi: 'IGI', prv: 'PRV' }
+const defaultVisibleCols = ['iva_amount']
+const visibleCols = ref([...defaultVisibleCols])
+
+function getColDisabled(key) {
+  return false
+}
+function resetCols() {
+  visibleCols.value = [...defaultVisibleCols]
+}
 
 function handleFileChange(file, files) { fileList.value = files }
 function handleFileRemove(file, files) { fileList.value = files }
@@ -136,7 +164,8 @@ async function saveAll() {
 
 <style scoped>
 .pedimento-page { display: flex; flex-direction: column; gap: 12px; }
-.page-header, .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.result-actions { display: flex; gap: 8px; align-items: center; }
 h2, h3 { margin: 0; }
 .page-header p { color: #909399; font-size: 13px; margin: 8px 0 0; }
 .actions { display: flex; gap: 12px; margin-top: 16px; }
