@@ -35,21 +35,29 @@
         <el-button type="primary" :loading="saving" @click="saveAll">确认入库</el-button>
       </div>
       <el-table :data="records" border stripe size="small" max-height="520">
-        <el-table-column prop="pedimento_number" label="关单号" min-width="190" />
-        <el-table-column prop="importer_rfc" label="进口商 RFC" width="145" />
-        <el-table-column prop="entry_date" label="入境/验证日期" width="145" />
-        <el-table-column prop="customs_office" label="海关" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="supplier_name" label="供应商" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="customs_value" label="海关完税价格" width="140" align="right">
+        <el-table-column prop="pedimento_number" label="关单号" min-width="170" />
+        <el-table-column prop="period" label="归属期" width="95" align="center" />
+        <el-table-column prop="id_fiscal" label="供应商 ID" width="120" />
+        <el-table-column prop="supplier_name" label="供应商" min-width="170" show-overflow-tooltip />
+        <el-table-column prop="pais" label="来源国" width="75" align="center" />
+        <el-table-column prop="custom_agency" label="报关行" min-width="150" show-overflow-tooltip />
+        <el-table-column prop="internal_ref" label="内部索引" width="115" />
+        <el-table-column prop="importer_rfc" label="进口商 RFC" width="140" />
+        <el-table-column prop="entry_date" label="入境日期" width="120" />
+        <el-table-column prop="fecha_de_pago" label="付款日期" width="120" />
+        <el-table-column prop="customs_value" label="完税总额" width="120" align="right">
           <template #default="{ row }">{{ formatMoney(row.customs_value) }}</template>
         </el-table-column>
-        <el-table-column prop="iva_amount" label="进口 IVA" width="130" align="right">
+        <el-table-column prop="iva_amount" label="进口 IVA" width="120" align="right">
           <template #default="{ row }"><strong>{{ formatMoney(row.iva_amount) }}</strong></template>
         </el-table-column>
-        <el-table-column prop="tariff_amount" label="关税/其他税" width="130" align="right">
+        <el-table-column prop="vat_of_prv" label="PRV IVA" width="110" align="right">
+          <template #default="{ row }">{{ formatMoney(row.vat_of_prv) }}</template>
+        </el-table-column>
+        <el-table-column prop="tariff_amount" label="关税(IGI)" width="110" align="right">
           <template #default="{ row }">{{ formatMoney(row.tariff_amount) }}</template>
         </el-table-column>
-        <el-table-column prop="parse_status" label="解析状态" width="100" align="center">
+        <el-table-column prop="parse_status" label="状态" width="85" align="center">
           <template #default="{ row }"><el-tag :type="row.parse_status === 'parsed' ? 'success' : 'warning'" size="small">{{ row.parse_status === 'parsed' ? '已识别' : '需核对' }}</el-tag></template>
         </el-table-column>
       </el-table>
