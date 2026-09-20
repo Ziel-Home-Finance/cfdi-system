@@ -49,6 +49,7 @@
         <el-table-column prop="id_fiscal" label="供应商 ID" width="120" />
         <el-table-column prop="supplier_name" label="供应商" min-width="170" show-overflow-tooltip />
         <el-table-column prop="pais" label="来源国" width="75" align="center" />
+        <el-table-column prop="custom_agent" label="报关代理人" min-width="130" show-overflow-tooltip />
         <el-table-column prop="custom_agency" label="报关行" min-width="150" show-overflow-tooltip />
         <el-table-column prop="internal_ref" label="内部索引" width="115" />
         <el-table-column prop="importer_rfc" label="进口商 RFC" width="140" />

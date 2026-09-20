@@ -255,41 +255,65 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
     break
   }
 
-  // ── 8-9. FECHA DE PAGO → Period ──
-  // Find payment section (post-PAGO ELECTRONICO)
-  let paySection = ''
-  const payIdx = Math.max(oneLine.indexOf('PAGO ELECTRONICO'), oneLine.indexOf('PAGO ELECTRÓNICO'))
-  if (payIdx >= 0) {
-    paySection = oneLine.slice(payIdx, Math.min(payIdx + 1500, oneLine.length))
-  }
-  // Search for date after "FECHA DE PAGO" with wide range (up to 300 chars later)
-  let fechaPago = ''
-  if (paySection) {
-    const fpIdx = paySection.indexOf('FECHA DE PAGO')
-    if (fpIdx >= 0) {
-      const tail = paySection.slice(fpIdx + 13, fpIdx + 400)
-      const dateMatch = tail.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/)
-      if (dateMatch) fechaPago = dateMatch[1]
-    }
-  }
-  // Broader fallback
-  if (!fechaPago) {
-    const fpIdx = oneLine.indexOf('FECHA DE PAGO')
-    if (fpIdx >= 0) {
-      const tail = oneLine.slice(fpIdx + 13, fpIdx + 500)
-      const m = tail.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/)
-      if (m) fechaPago = m[1]
-    }
-  }
-  // Normalize to YYYY-MM-DD
-  if (fechaPago) {
-    const parts = fechaPago.replace(/[\/\.]/g, '-').split('-')
+  // ── 8-9. Dates (FECHA DE PAGO / FECHAS area / ENTRADA) ──
+  // Normalize any DD/MM/YYYY or YYYY-MM-DD to YYYY-MM-DD
+  function normDate(dateStr) {
+    if (!dateStr) return ''
+    const parts = dateStr.replace(/[\/\.]/g, '-').split('-')
+    if (parts.length !== 3) return dateStr
     if (parts[0].length === 4) {
-      fechaPago = `${parts[0]}-${String(parts[1]).padStart(2, '0')}-${String(parts[2]).padStart(2, '0')}`
-    } else {
-      fechaPago = `${parts[2]}-${String(parts[1]).padStart(2, '0')}-${String(parts[0]).padStart(2, '0')}`
+      return `${parts[0]}-${String(parts[1]).padStart(2, '0')}-${String(parts[2]).padStart(2, '0')}`
+    }
+    return `${parts[2]}-${String(parts[1]).padStart(2, '0')}-${String(parts[0]).padStart(2, '0')}`
+  }
+
+  let fechaPago = ''
+  let entryDate = ''
+
+  // Source A: FECHAS area table (layout: "FECHAS PAGO ENTRADA dd/mm/yyyy dd/mm/yyyy")
+  const fechasIdx = oneLine.indexOf('FECHAS')
+  if (fechasIdx >= 0) {
+    const fechasText = oneLine.slice(fechasIdx, fechasIdx + 300)
+    const pagoMatch = fechasText.match(/PAGO\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i)
+    if (pagoMatch) fechaPago = pagoMatch[1]
+    const entradaMatch = fechasText.match(/ENTRADA\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i)
+    if (entradaMatch) entryDate = entradaMatch[1]
+  }
+
+  // Source B: "FECHA DE PAGO" label (some formats)
+  if (!fechaPago) {
+    const payIdx = Math.max(oneLine.indexOf('PAGO ELECTRONICO'), oneLine.indexOf('PAGO ELECTRÓNICO'))
+    let paySection = ''
+    if (payIdx >= 0) {
+      paySection = oneLine.slice(payIdx, Math.min(payIdx + 1500, oneLine.length))
+    }
+    if (paySection) {
+      const fpIdx = paySection.indexOf('FECHA DE PAGO')
+      if (fpIdx >= 0) {
+        const m = paySection.slice(fpIdx + 13, fpIdx + 400).match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/)
+        if (m) fechaPago = m[1]
+      }
+    }
+    // Broader oneLine fallback
+    if (!fechaPago) {
+      const fpIdx = oneLine.indexOf('FECHA DE PAGO')
+      if (fpIdx >= 0) {
+        const m = oneLine.slice(fpIdx + 13, fpIdx + 500).match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/)
+        if (m) fechaPago = m[1]
+      }
     }
   }
+
+  // Source C: extract ENTRADA date from broader match if not found in FECHAS
+  if (!entryDate) {
+    const edMatch = oneLine.match(/ENTRADA\s+PAGO[\s\S]{0,80}?(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i) ||
+      oneLine.match(/(?:FECHA\s+DE\s+ENTRADA|FECHA\s+VALIDAC[IÍ]ON)[:\s]*(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i)
+    if (edMatch) entryDate = edMatch[1]
+  }
+
+  // Normalize both dates
+  fechaPago = normDate(fechaPago)
+  entryDate = normDate(entryDate)
   const period = dateToPeriod(fechaPago)
 
   // ── 10-13. Supplier fields (PROVEEDOR) ──
@@ -383,78 +407,90 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
     }
   }
 
-  // ── 15. Custom Agency (customs broker) ──
-  // Supports two broker layouts:
-  //   Type 1 (BARQUIN MOLINA): name after CERTIFICADO serial number
-  //       "CERTIFICADO: 00001000000723222734 MARCO ANTONIO BARQUIN MOLINA"
-  //   Type 2 (PRACTICA ADUANAL): individual + company after NOMBRE O RAZ SOC
-  //       "NOMBRE O RAZ SOC: ERNESTO GALICIA ESTRELLA PRACTICA ADUANAL, S.C."
-  let customAgency = ''
+  // ── 15. Customs Agent & Agency ──
+  // NOMBRE O RAZ SOC: INDIVIDUAL_NAME [RFC] COMPANY_NAME
+  // Type 1: "MARCO ANTONIO BARQUIN MOLINA" (individual only, no company)
+  // Type 2: "ERNESTO GALICIA ESTRELLA PRACTICA ADUANAL, S.C."
+  // Type 3: "ALEJANDRO GOMEZ BARQUIN GOBA7003037I1 GOMSA INTEGRADORA S.A.P.I. DE C.V."
+  // Individual name = no known legal suffix; company = ends with S.C., S.A.P.I. DE C.V., etc.
+  let customAgent = ''     // 报关代理人 (individual)
+  let customAgency = ''    // 报关行 (company)
+
   const agentIdx = oneLine.indexOf('AGENTE ADUANAL')
   if (agentIdx >= 0) {
-    const agentText = oneLine.slice(agentIdx, Math.min(agentIdx + 1500, oneLine.length))
-    const candidates = []
+    const agentText = oneLine.slice(agentIdx, Math.min(agentIdx + 1800, oneLine.length))
 
-    // Pattern A: name directly after CERTIFICADO serial number (Type 1)
-    const certMatch = agentText.match(/CERTIFICADO[:\s]*\d{15,25}\s+([A-Z][A-Z\s]{5,80}?)(?:\s{2,}|e\.firma|CURP|$)/i)
-    if (certMatch && certMatch[1].trim().length > 5) {
-      candidates.push(clean(certMatch[1]))
-    }
+    // Collect all-caps name candidates: individual and company
+    const individualNames = []
+    const companyNames = []
 
-    // Pattern B: after "NOMBRE O RAZ SOC:" — may contain individual + company names
-    const razMatch = agentText.match(
-      /NOMBRE\s+O\s+RAZ[.\s]*SOC[.:\s]*\s*([A-Z][A-Z\s,.'&()-]+?(?:\s{2,}|e\.firma|CERTIFICADO|$))/i
-    )
-    if (razMatch && razMatch[1].trim().length > 5) {
-      const full = clean(razMatch[1])
-      // Check for legal suffixes (Type 2 company name)
-      const suffixRe = /(?:S\s*\.?\s*C\s*\.?|S\s*\.?\s*A\s*\.?|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?)\b/gi
-      let company = ''
-      let m
-      while ((m = suffixRe.exec(full)) !== null) {
-        const before = full.slice(0, m.index + m[0].length)
-        // Find the company name portion containing this suffix (from last whitespace before)
-        const wsIdx = before.lastIndexOf(' ')
-        company = clean(wsIdx > 0 ? before.slice(wsIdx) : before)
-        if (company.length > 5) candidates.push(company)
-      }
-      // If no suffix found, the whole thing is an individual name (or Type 1 fallback)
-      if (!company && full.length > 5) {
-        candidates.push(full)
-      }
-    }
+    // Legal suffix pattern (company indicators)
+    const legalSuffixRe = /(?:S\s*\.?\s*C\s*\.?|S\s*\.?\s*A\s*\.?|S\.?\s*A\.?\s*P\.?\s*I\.?\s*DE\s*C\.?\s*V\.?|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?|S\.?\s*DE\s+R\.?\s*L\.?\s*DE\s+C\.?\s*V\.?)\b/i
+    const individualRe = /(?:MOLINA|BARQUIN|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|GALICIA|GOMEZ|ADUANAL)/i
 
-    // Pattern C: raw text line-by-line all-caps proper names
+    // Extract name candidates from raw lines (works for both pdf.js items and block-text)
     const lines = raw.split('\n')
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim()
-      // All caps, 2+ words, contains known surname (handles both single and double spaces)
-      if (/^[A-ZñÑ]{2,}(?:\s+[A-ZñÑ]{2,})+$/.test(line) &&
-          /(?:MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL)/i.test(line) &&
-          !/(?:RFC|CURP|CERTIFICADO|PATENTE|NOMBRE|PEDIMENTO)/i.test(line) &&
-          line.length > 12 && line.length < 100) {
-        candidates.push(clean(line))
+      // Skip metadata lines
+      if (/^(?:RFC|CURP|CERTIFICADO|PATENTE|PEDIMENTO|NOMBRE|e\.firma|NUMERO|[0-9+/=]{20,})/i.test(line)) continue
+      if (line.length < 8 || line.length > 120) continue
+
+      // Company name: has legal suffix
+      const suffixMatch = line.match(legalSuffixRe)
+      if (suffixMatch) {
+        // Take text from last whitespace before suffix, extending to get full company name
+        const endOfSuffix = suffixMatch.index + suffixMatch[0].length
+        // Find the start of company name: last space before name that isn't part of another entity
+        let startIdx = 0
+        for (let j = endOfSuffix - 1; j >= 0; j--) {
+          if (line[j] === ' ' && j > 3) { startIdx = j + 1; break }
+        }
+        const company = clean(line.slice(startIdx))
+        if (company.length > 5 && !legalSuffixRe.test(company.slice(0, 3))) {
+          companyNames.push(company)
+        }
+        // If the individual name precedes the company on the same line
+        const beforeCompany = line.slice(0, startIdx - 1).trim()
+        if (beforeCompany && individualRe.test(beforeCompany)) {
+          const words = beforeCompany.split(/\s+/)
+          // Individual names are 2-4 words, no legal suffix, contains known surname
+          const indv = words.slice(-3).join(' ').trim()
+          if (indv.length > 8 && individualRe.test(indv) && !legalSuffixRe.test(indv)) {
+            individualNames.push(indv)
+          }
+        }
+        continue
       }
-      // Company name with legal suffix on its own line
-      if (/^[A-Z]{2,}.+?(?:S\.?\s*C\.?|S\.?\s*A\.?)$/.test(line) &&
-          line.length > 10 && !line.includes('CERTIFICADO')) {
-        candidates.push(clean(line))
+
+      // Individual name: all caps, 2-4 words, contains known surname
+      if (/^[A-ZñÑ]{2,}(?:\s+[A-ZñÑ]{2,}){1,3}$/.test(line) &&
+          individualRe.test(line) &&
+          !/(?:RFC|CURP|CERTIFICADO|NUMERO)/i.test(line)) {
+        individualNames.push(clean(line))
+      }
+
+      // Company-only line (no individual name, just company with suffix)
+      if (legalSuffixRe.test(line) && line.length > 10) {
+        const co = clean(line)
+        if (!companyNames.includes(co)) companyNames.push(co)
       }
     }
 
-    // Prefer company name (has a legal suffix) over individual name
-    const legalSuffixTest = /(?:S\s*\.?\s*C\s*\.?\s*$|S\s*\.?\s*A\s*\.?\s*$|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?\s*$)/i
-    const companyNames = candidates.filter(c => legalSuffixTest.test(c))
-    customAgency = companyNames.length > 0
-      ? companyNames[companyNames.length - 1]
-      : (candidates.length > 0 ? candidates[candidates.length - 1] : '')
-  }
+    // Deduplicate by longest match (prefer full names)
+    customAgent = individualNames.length > 0 ? individualNames[individualNames.length - 1] : ''
+    customAgency = companyNames.length > 0 ? companyNames[companyNames.length - 1] : ''
 
-  // ── 16. Entry date ──
-  let entryDate = ''
-  const edMatch = oneLine.match(/ENTRADA\s+PAGO[\s\S]{0,80}?(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i) ||
-    oneLine.match(/(?:FECHA\s+DE\s+ENTRADA|FECHA\s+VALIDAC[IÍ]ON)[:\s]*(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i)
-  if (edMatch) entryDate = edMatch[1]
+    // Type 1 fallback: individual-only broker → use as both agent and agency
+    // Also check CERTIFICADO area for the name
+    if (!customAgent) {
+      const certMatch = agentText.match(/CERTIFICADO[:\s]*\d{15,25}\s+([A-Z][A-Z\s]{5,80}?)(?:\s{2,}|e\.firma|CURP|$)/i)
+      if (certMatch && certMatch[1].trim().length > 5) customAgent = clean(certMatch[1])
+    }
+
+    // If only individual found, use it as both
+    if (customAgent && !customAgency) customAgency = customAgent
+  }
 
   // ── 17. Customs office ──
   let customsOffice = ''
@@ -497,7 +533,8 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
     iva_prv: ivaPrv,        // IVA/PRV
     igi: igi,                // IGI (关税, same as tariff_amount)
     prv: prv,                // PRV
-    custom_agency: customAgency,
+    custom_agent: customAgent,     // 报关代理人 (individual)
+    custom_agency: customAgency,   // 报关行 (company)
     internal_ref: internalRef,
   }
 }
