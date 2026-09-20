@@ -151,16 +151,29 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
    */
   function extractCuadroItem(text, label, labelPos) {
     const start = labelPos + label.length
+    // Detect if this label is paired with the next tax label (Type 1: "DTA IGI", "IVA PRV")
+    const after = text.slice(start, Math.min(start + 60, text.length))
+    const nextWord = (after.match(/^[\s,]*(\w[\w\/]*)/) || [])[1] || ''
+    const isPairLeader = nextWord && CUADRO_LABELS.some(l =>
+      l !== label && l !== 'IVA/PRV' && l.toUpperCase() === nextWord.toUpperCase()
+    )
+
     let endIdx = text.length
     for (const other of CUADRO_MARKERS) {
       if (other === label) continue
-      const oi = text.indexOf(other, start)
-      if (oi >= start && oi < endIdx) endIdx = oi
+      if (isPairLeader && other.toUpperCase() === nextWord.toUpperCase()) continue
+      const oi = text.indexOf(other, start + 1)
+      if (oi > start && oi < endIdx) endIdx = oi
     }
     const section = text.slice(start, endIdx)
-    const nums = [...section.matchAll(/[\d,]+(?:\.\d{1,2})?/g)].map(m => numVal(m[0]))
-    // Last number = amount (rate/percentage comes first, then the monetary value)
-    return nums.length > 0 ? nums[nums.length - 1] : 0
+    const rawNums = [...section.matchAll(/[\d,]+(?:\.\d{1,2})?/g)].map(m => numVal(m[0]))
+    const nums = rawNums.filter(n => n > 0)
+
+    if (nums.length === 0) return 0
+    // Type 1 pair: DTA IGI 0 0 4396 152893 → DTA=4396 (2nd to last), IGI=152893 (last)
+    // IVA PRV 0 0 113084 330 → IVA=113084 (2nd to last), PRV=330 (last)
+    if (isPairLeader && nums.length >= 2) return nums[nums.length - 2]
+    return nums[nums.length - 1]
   }
 
   // Build cuadro / tasas text
@@ -268,6 +281,15 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
       if (m) fechaPago = m[1]
     }
   }
+  // Normalize to YYYY-MM-DD
+  if (fechaPago) {
+    const parts = fechaPago.replace(/[\/\.]/g, '-').split('-')
+    if (parts[0].length === 4) {
+      fechaPago = `${parts[0]}-${String(parts[1]).padStart(2, '0')}-${String(parts[2]).padStart(2, '0')}`
+    } else {
+      fechaPago = `${parts[2]}-${String(parts[1]).padStart(2, '0')}-${String(parts[0]).padStart(2, '0')}`
+    }
+  }
   const period = dateToPeriod(fechaPago)
 
   // ── 10-13. Supplier fields (PROVEEDOR) ──
@@ -363,45 +385,54 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
 
   // ── 15. Custom Agency (customs broker) ──
   // Supports two broker layouts:
-  //   Type 1 (BARQUIN MOLINA): individual name only → "MARCO ANTONIO BARQUIN MOLINA"
-  //   Type 2 (PRACTICA ADUANAL): individual name + company name → "PRACTICA ADUANAL, S.C."
+  //   Type 1 (BARQUIN MOLINA): name after CERTIFICADO serial number
+  //       "CERTIFICADO: 00001000000723222734 MARCO ANTONIO BARQUIN MOLINA"
+  //   Type 2 (PRACTICA ADUANAL): individual + company after NOMBRE O RAZ SOC
+  //       "NOMBRE O RAZ SOC: ERNESTO GALICIA ESTRELLA PRACTICA ADUANAL, S.C."
   let customAgency = ''
-  const agentIdx = Math.max(oneLine.indexOf('AGENTE ADUANAL'), 0)
+  const agentIdx = oneLine.indexOf('AGENTE ADUANAL')
   if (agentIdx >= 0) {
     const agentText = oneLine.slice(agentIdx, Math.min(agentIdx + 1500, oneLine.length))
-    // Collect all candidate agency names
     const candidates = []
 
-    // Pattern A: after "NOMBRE O RAZ SOC:" — capture all names
+    // Pattern A: name directly after CERTIFICADO serial number (Type 1)
+    const certMatch = agentText.match(/CERTIFICADO[:\s]*\d{15,25}\s+([A-Z][A-Z\s]{5,80}?)(?:\s{2,}|e\.firma|CURP|$)/i)
+    if (certMatch && certMatch[1].trim().length > 5) {
+      candidates.push(clean(certMatch[1]))
+    }
+
+    // Pattern B: after "NOMBRE O RAZ SOC:" — may contain individual + company names
     const razMatch = agentText.match(
-      /NOMBRE\s+O\s+RAZ[.\s]*SOC[.:\s]*\s*([A-Z][A-Z\s,.'&()-]+(?:S\.?\s*C\.?|S\.?\s*A\.?|S\.?\s*DE\s*[CR][LV]|SC|SA|MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL))\b/i
+      /NOMBRE\s+O\s+RAZ[.\s]*SOC[.:\s]*\s*([A-Z][A-Z\s,.'&()-]+?(?:\s{2,}|e\.firma|CERTIFICADO|$))/i
     )
-    if (razMatch) {
-      // Split on legal-suffix boundaries to separate individual + company names
-      // "ERNESTO GALICIA ESTRELLA PRACTICA ADUANAL, S.C." → individual + company
-      const full = razMatch[1]
-      // Find legal suffix positions
-      const suffixRe = /(?:S\s*\.?\s*C\s*\.?|S\s*\.?\s*A\s*\.?|S\s*\.?\s*DE\s+R\s*\.?\s*L\s*\.?|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?|S\.?\s*C\.?|INC\.?|LLC|LTD\.?|CORP\.?|B\.?\s*V\.?|GMBH)\b/gi
-      let lastIdx = 0
-      let match
-      while ((match = suffixRe.exec(full)) !== null) {
-        // Company name: text from lastIdx to match end, trimming leading spaces
-        const company = full.slice(lastIdx, match.index + match[0].length).replace(/^\s+/, '').trim()
+    if (razMatch && razMatch[1].trim().length > 5) {
+      const full = clean(razMatch[1])
+      // Check for legal suffixes (Type 2 company name)
+      const suffixRe = /(?:S\s*\.?\s*C\s*\.?|S\s*\.?\s*A\s*\.?|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?)\b/gi
+      let company = ''
+      let m
+      while ((m = suffixRe.exec(full)) !== null) {
+        const before = full.slice(0, m.index + m[0].length)
+        // Find the company name portion containing this suffix (from last whitespace before)
+        const wsIdx = before.lastIndexOf(' ')
+        company = clean(wsIdx > 0 ? before.slice(wsIdx) : before)
         if (company.length > 5) candidates.push(company)
-        lastIdx = match.index + match[0].length
       }
-      // If no legal suffix found (Type 1), use the whole name
-      if (candidates.length === 0 && full.trim().length > 5) {
-        candidates.push(full.trim())
+      // If no suffix found, the whole thing is an individual name (or Type 1 fallback)
+      if (!company && full.length > 5) {
+        candidates.push(full)
       }
     }
 
-    // Pattern B: line-by-line all-caps proper names (Type 1 fallback)
+    // Pattern C: raw text line-by-line all-caps proper names
     const lines = raw.split('\n')
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim()
-      if (/^[A-Z]{2,}(?:\s{2,}[A-Z]{2,}){2,}$/.test(line) &&
-          /(?:MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL)/i.test(line)) {
+      // All caps, 2+ words, contains known surname (handles both single and double spaces)
+      if (/^[A-ZñÑ]{2,}(?:\s+[A-ZñÑ]{2,})+$/.test(line) &&
+          /(?:MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL)/i.test(line) &&
+          !/(?:RFC|CURP|CERTIFICADO|PATENTE|NOMBRE|PEDIMENTO)/i.test(line) &&
+          line.length > 12 && line.length < 100) {
         candidates.push(clean(line))
       }
       // Company name with legal suffix on its own line
@@ -412,6 +443,12 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
     }
 
     // Prefer company name (has a legal suffix) over individual name
+    const legalSuffixTest = /(?:S\s*\.?\s*C\s*\.?\s*$|S\s*\.?\s*A\s*\.?\s*$|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?\s*$)/i
+    const companyNames = candidates.filter(c => legalSuffixTest.test(c))
+    customAgency = companyNames.length > 0
+      ? companyNames[companyNames.length - 1]
+      : (candidates.length > 0 ? candidates[candidates.length - 1] : '')
+  }
     const legalSuffixTest = /(?:S\s*\.?\s*C\s*\.?\s*$|S\s*\.?\s*A\s*\.?\s*$|S\s*\.?\s*DE\s+R\s*\.?\s*L\s*\.?\s*$|SC\s*$|SA\s*$|INC\.?\s*$|LLC\s*$|LTD\.?\s*$|B\.?\s*V\.?\s*$|GMBH\s*$)/i
     const companyNames = candidates.filter(c => legalSuffixTest.test(c))
     customAgency = companyNames.length > 0 ? companyNames[companyNames.length - 1] : (candidates.length > 0 ? candidates[0] : '')

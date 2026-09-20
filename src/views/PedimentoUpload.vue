@@ -52,7 +52,6 @@
         <el-table-column prop="custom_agency" label="报关行" min-width="150" show-overflow-tooltip />
         <el-table-column prop="internal_ref" label="内部索引" width="115" />
         <el-table-column prop="importer_rfc" label="进口商 RFC" width="140" />
-        <el-table-column prop="entry_date" label="入境日期" width="120" />
         <el-table-column prop="fecha_de_pago" label="付款日期" width="120" />
         <el-table-column prop="customs_value" label="完税总额" width="120" align="right">
           <template #default="{ row }">{{ formatMoney(row.customs_value) }}</template>
