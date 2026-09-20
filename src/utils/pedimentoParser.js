@@ -449,10 +449,6 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
       ? companyNames[companyNames.length - 1]
       : (candidates.length > 0 ? candidates[candidates.length - 1] : '')
   }
-    const legalSuffixTest = /(?:S\s*\.?\s*C\s*\.?\s*$|S\s*\.?\s*A\s*\.?\s*$|S\s*\.?\s*DE\s+R\s*\.?\s*L\s*\.?\s*$|SC\s*$|SA\s*$|INC\.?\s*$|LLC\s*$|LTD\.?\s*$|B\.?\s*V\.?\s*$|GMBH\s*$)/i
-    const companyNames = candidates.filter(c => legalSuffixTest.test(c))
-    customAgency = companyNames.length > 0 ? companyNames[companyNames.length - 1] : (candidates.length > 0 ? candidates[0] : '')
-  }
 
   // ── 16. Entry date ──
   let entryDate = ''
