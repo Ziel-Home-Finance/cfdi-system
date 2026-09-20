@@ -178,11 +178,8 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
   if (ti >= 0) {
     tasasSection = oneLine.slice(ti, Math.min(ti + 2000, oneLine.length))
   }
-  // CUADRO has the actual tax amounts → always the primary source.
-  // TASAS A NIVEL PEDIMENTO only has rates/tariff % (not amounts) → fallback only.
-  const taxText = cuadro || tasasSection
 
-  // TOTAL: use lastIndexOf to avoid matching "TOTALES" column header (Type 2 two-col layout)
+  // TOTAL: from CUADRO (both types). Use lastIndexOf to avoid matching "TOTALES" header (Type 2).
   let total = 0
   if (cuadro) {
     const totalIdx = cuadro.lastIndexOf('TOTAL')
@@ -192,48 +189,55 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
     total = findNumInRange(tasasSection, tasasSection.lastIndexOf('TOTAL') + 5, 100, 1000)
   }
 
-  // DTA
-  let dta = 0
-  const dtaIdx = taxText.indexOf('DTA')
-  if (dtaIdx >= 0) dta = extractCuadroItem(taxText, 'DTA', dtaIdx)
+  // Individual tax items: use combined text spanning CUADRO → TASAS.
+  // Type 1: items are in CUADRO. Type 2: items are in TASAS (each label appears twice:
+  //   first as rate row "1 DTA 7 8.000", second as amount row "DTA 0 6348").
+  // We use lastIndexOf + extractCuadroItem to get the LAST occurrence (= amount row).
+  const taxStart = Math.min(ci >= 0 ? ci : Infinity, ti >= 0 ? ti : Infinity)
+  const taxEnd = Math.max(
+    (ci >= 0 ? ci + cuadro.length : 0),
+    (ti >= 0 ? ti + tasasSection.length : 0)
+  )
+  const taxText = taxStart >= 0 && taxEnd > taxStart
+    ? oneLine.slice(taxStart, Math.min(taxEnd, oneLine.length))
+    : (cuadro || tasasSection)
 
-  // IVA/PRV
-  let ivaPrv = 0
-  const ivaPrvIdx = taxText.indexOf('IVA/PRV')
-  if (ivaPrvIdx >= 0) ivaPrv = extractCuadroItem(taxText, 'IVA/PRV', ivaPrvIdx)
-
-  // IGI (try IGI/IGE first, then IGI alone)
-  let igi = 0
-  let igiIdx = taxText.indexOf('IGI/IGE')
-  if (igiIdx >= 0) {
-    igi = extractCuadroItem(taxText, 'IGI/IGE', igiIdx)
-  } else {
-    igiIdx = taxText.indexOf('IGI')
-    if (igiIdx >= 0) igi = extractCuadroItem(taxText, 'IGI', igiIdx)
+  // Helper: find last occurrence of a label in taxText, extract amount
+  function lastItem(text, label) {
+    const idx = text.lastIndexOf(label)
+    if (idx < 0) return 0
+    return extractCuadroItem(text, label, idx)
   }
 
-  // Standalone IVA (exclude IVA/PRV) — last occurrence is the import VAT
+  // DTA
+  let dta = lastItem(taxText, 'DTA')
+
+  // IVA/PRV
+  let ivaPrv = lastItem(taxText, 'IVA/PRV')
+
+  // IGI
+  let igi = lastItem(taxText, 'IGI/IGE')
+  if (!igi) igi = lastItem(taxText, 'IGI')
+
+  // Standalone IVA (exclude IVA/PRV substring matches)
   let iva = 0
-  const ivaMatches = [...taxText.matchAll(/\bIVA\b(?!\s*\/\s*PRV)/gi)]
-  if (ivaMatches.length > 0) {
-    const lastIva = ivaMatches[ivaMatches.length - 1]
-    iva = extractCuadroItem(taxText, 'IVA', lastIva.index)
+  const allIva = [...taxText.matchAll(/\bIVA\b(?!\s*\/\s*PRV)/gi)]
+  if (allIva.length > 0) {
+    const last = allIva[allIva.length - 1]
+    iva = extractCuadroItem(taxText, 'IVA', last.index)
   }
 
   // PRV (standalone — NOT the "PRV" substring inside "IVA/PRV")
   let prv = 0
-  // Find all PRV occurrences, skip the one that's part of IVA/PRV
   let searchFrom = 0
   while (true) {
     const prvIdx = taxText.indexOf('PRV', searchFrom)
     if (prvIdx < 0) break
-    // Check if this PRV is part of "IVA/PRV"
     const before = taxText.slice(Math.max(0, prvIdx - 7), prvIdx)
     if (before.includes('IVA/')) {
       searchFrom = prvIdx + 1
       continue
     }
-    // This is standalone PRV — extract
     prv = extractCuadroItem(taxText, 'PRV', prvIdx)
     break
   }
