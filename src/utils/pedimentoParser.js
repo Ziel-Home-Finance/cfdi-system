@@ -336,10 +336,30 @@ const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
     }
   }
 
-  // ── 14. Internal Reference (LMxxxxx or MXxxxxx) ──
+  // ── 14. Internal Reference ──
+  // The internal ref (LM260293, MX260150, etc.) always appears adjacent to COVE code.
+  // Type 1: "LM260293,COVE2689ES4X5" → code before COVE
+  // Type 2: "COVE2688B5CY5 MX260150 23/06/2026" → code after COVE
   let internalRef = ''
-  const irefMatch = oneLine.match(/\b((?:LM|MX)\d{5,6})\b/)
-  if (irefMatch) internalRef = irefMatch[1]
+  // Pattern A: code BEFORE COVE — e.g. "LM260293,COVE..."
+  let irefMatch = oneLine.match(/\b([A-Z]{2,}\d{5,6})\s*,?\s*COVE[A-Z0-9]+\b/)
+  if (irefMatch) {
+    internalRef = irefMatch[1]
+  }
+  // Pattern B: code AFTER COVE — e.g. "COVE2688B5CY5 MX260150 23/06/2026"
+  if (!internalRef) {
+    irefMatch = oneLine.match(/\bCOVE[A-Z0-9]+\s+([A-Z]{2,}\d{5,6})\b/)
+    if (irefMatch) internalRef = irefMatch[1]
+  }
+  // Pattern C: broad fallback for unusual layouts
+  if (!internalRef) {
+    const allCodes = [...oneLine.matchAll(/\b([A-Z]{2,}\d{5,6})\b/g)]
+    // Exclude COVE itself and known non-ref codes (OOLU, CSGU)
+    const exclude = /^(COVE|OOLU|CSGU|LLZC)/i
+    for (const m of allCodes) {
+      if (!exclude.test(m[1])) { internalRef = m[1]; break }
+    }
+  }
 
   // ── 15. Custom Agency (customs broker) ──
   // Supports two broker layouts:
