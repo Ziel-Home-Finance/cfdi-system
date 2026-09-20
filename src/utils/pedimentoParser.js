@@ -140,7 +140,9 @@ function parseFields(text, fileName) {
   // We must take the LAST number → amount, NOT the first → rate.
   const CUADRO_END_MARKERS = ['DEPOSITO REFERENCIADO', 'DEPÓSITO REFERENCIADO',
     '***PAGO', 'CODIGO DE BARRAS', 'DATOS DEL PROVEEDOR']
-  const CUADRO_LABELS = ['DTA', 'IVA/PRV', 'IGI/IGE', 'IGI', 'IVA', 'PRV']
+  // CUADRO labels + table-column markers (EFECTIVO/OTROS appear in Type 2 two-column layout)
+const CUADRO_LABELS = ['DTA', 'IVA/PRV', 'IGI/IGE', 'IGI', 'IVA', 'PRV']
+const CUADRO_MARKERS = [...CUADRO_LABELS, 'EFECTIVO', 'OTROS', 'TOTAL']
 
   /**
    * Extract amount for one CUADRO line item.
@@ -150,7 +152,7 @@ function parseFields(text, fileName) {
   function extractCuadroItem(text, label, labelPos) {
     const start = labelPos + label.length
     let endIdx = text.length
-    for (const other of [...CUADRO_LABELS, 'TOTAL']) {
+    for (const other of CUADRO_MARKERS) {
       if (other === label) continue
       const oi = text.indexOf(other, start)
       if (oi >= start && oi < endIdx) endIdx = oi
@@ -176,12 +178,15 @@ function parseFields(text, fileName) {
   if (ti >= 0) {
     tasasSection = oneLine.slice(ti, Math.min(ti + 2000, oneLine.length))
   }
-  const taxText = tasasSection || cuadro
+  // CUADRO has the actual tax amounts → always the primary source.
+  // TASAS A NIVEL PEDIMENTO only has rates/tariff % (not amounts) → fallback only.
+  const taxText = cuadro || tasasSection
 
-  // TOTAL
+  // TOTAL: use lastIndexOf to avoid matching "TOTALES" column header (Type 2 two-col layout)
   let total = 0
   if (cuadro) {
-    total = findNumInRange(cuadro, cuadro.indexOf('TOTAL') + 5, 100, 1000)
+    const totalIdx = cuadro.lastIndexOf('TOTAL')
+    if (totalIdx >= 0) total = findNumInRange(cuadro, totalIdx + 5, 100, 1000)
   }
   if (!total && tasasSection) {
     total = findNumInRange(tasasSection, tasasSection.lastIndexOf('TOTAL') + 5, 100, 1000)
@@ -215,13 +220,22 @@ function parseFields(text, fileName) {
     iva = extractCuadroItem(taxText, 'IVA', lastIva.index)
   }
 
-  // PRV (standalone — skip the PRV substring inside IVA/PRV)
+  // PRV (standalone — NOT the "PRV" substring inside "IVA/PRV")
   let prv = 0
-  const prvSearchStart = ivaPrvIdx >= 0
-    ? taxText.indexOf('PRV', ivaPrvIdx + 7)  // skip past "IVA/PRV"
-    : taxText.indexOf('PRV')
-  if (prvSearchStart >= 0) {
-    prv = extractCuadroItem(taxText, 'PRV', prvSearchStart)
+  // Find all PRV occurrences, skip the one that's part of IVA/PRV
+  let searchFrom = 0
+  while (true) {
+    const prvIdx = taxText.indexOf('PRV', searchFrom)
+    if (prvIdx < 0) break
+    // Check if this PRV is part of "IVA/PRV"
+    const before = taxText.slice(Math.max(0, prvIdx - 7), prvIdx)
+    if (before.includes('IVA/')) {
+      searchFrom = prvIdx + 1
+      continue
+    }
+    // This is standalone PRV — extract
+    prv = extractCuadroItem(taxText, 'PRV', prvIdx)
+    break
   }
 
   // ── 8-9. FECHA DE PAGO → Period ──
@@ -318,61 +332,65 @@ function parseFields(text, fileName) {
     }
   }
 
-  // ── 14. Internal Reference (LMxxxxx) ──
+  // ── 14. Internal Reference (LMxxxxx or MXxxxxx) ──
   let internalRef = ''
-  const irefMatch = oneLine.match(/\b(LM\d{5,6})\b/)
+  const irefMatch = oneLine.match(/\b((?:LM|MX)\d{5,6})\b/)
   if (irefMatch) internalRef = irefMatch[1]
 
   // ── 15. Custom Agency (customs broker) ──
+  // Supports two broker layouts:
+  //   Type 1 (BARQUIN MOLINA): individual name only → "MARCO ANTONIO BARQUIN MOLINA"
+  //   Type 2 (PRACTICA ADUANAL): individual name + company name → "PRACTICA ADUANAL, S.C."
   let customAgency = ''
-  // Find AGENTE ADUANAL section
   const agentIdx = Math.max(oneLine.indexOf('AGENTE ADUANAL'), 0)
   if (agentIdx >= 0) {
     const agentText = oneLine.slice(agentIdx, Math.min(agentIdx + 1500, oneLine.length))
+    // Collect all candidate agency names
+    const candidates = []
 
-    // Pattern 1: "NOMBRE O RAZ SOC: COMPANY_NAME" or "NOMBRE O RAZ. SOC.: COMPANY_NAME"
+    // Pattern A: after "NOMBRE O RAZ SOC:" — capture all names
     const razMatch = agentText.match(
-      /NOMBRE\s+O\s+RAZ[.\s]*SOC[.:\s]*\s*\n?\s*([A-Z][A-Z\s,.'&()-]+(?:S\.?\s*C\.?|S\.?\s*A\.?|S\.?\s*DE\s*[CR][LV]|SC|SA|MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL))\b/i
+      /NOMBRE\s+O\s+RAZ[.\s]*SOC[.:\s]*\s*([A-Z][A-Z\s,.'&()-]+(?:S\.?\s*C\.?|S\.?\s*A\.?|S\.?\s*DE\s*[CR][LV]|SC|SA|MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL))\b/i
     )
     if (razMatch) {
-      customAgency = clean(razMatch[1])
-    } else {
-      // Pattern 2: Agent name on its own line (e.g. "MARCO ANTONIO BARQUIN MOLINA")
-      // Look for all-caps name with 2-4 words near certificate number
-      const certMatch = agentText.match(/CERTIFICADO[:\s]*\d+\s+([A-Z][A-Z\s]+?\s+[A-Z]{2,6}\d{2})/i)
-      if (certMatch) {
-        customAgency = clean(certMatch[1])
-      } else {
-        // Pattern 3: Company name near PATENTE
-        const patentIdx = oneLine.indexOf('PATENTE O AUTORIZACION')
-        if (patentIdx > 0) {
-          const before = oneLine.slice(Math.max(0, patentIdx - 800), patentIdx)
-          const coMatch = before.match(
-            /\b([A-Z][A-Z\s]+(?:MOLINA|ESTRELLA|PRACTICA\s+ADUANAL))\b/i
-          )
-          if (coMatch) customAgency = clean(coMatch[1])
-        }
+      // Split on legal-suffix boundaries to separate individual + company names
+      // "ERNESTO GALICIA ESTRELLA PRACTICA ADUANAL, S.C." → individual + company
+      const full = razMatch[1]
+      // Find legal suffix positions
+      const suffixRe = /(?:S\s*\.?\s*C\s*\.?|S\s*\.?\s*A\s*\.?|S\s*\.?\s*DE\s+R\s*\.?\s*L\s*\.?|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?|S\.?\s*C\.?|INC\.?|LLC|LTD\.?|CORP\.?|B\.?\s*V\.?|GMBH)\b/gi
+      let lastIdx = 0
+      let match
+      while ((match = suffixRe.exec(full)) !== null) {
+        // Company name: text from lastIdx to match end, trimming leading spaces
+        const company = full.slice(lastIdx, match.index + match[0].length).replace(/^\s+/, '').trim()
+        if (company.length > 5) candidates.push(company)
+        lastIdx = match.index + match[0].length
+      }
+      // If no legal suffix found (Type 1), use the whole name
+      if (candidates.length === 0 && full.trim().length > 5) {
+        candidates.push(full.trim())
       }
     }
 
-    // Pattern 4: Find all-caps proper name after certificate
-    if (!customAgency) {
-      const lines = raw.split('\n')
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim()
-        // "MARCO ANTONIO BARQUIN  MOLINA" - all caps, 3+ words, contains surname
-        if (/^[A-Z]{2,}(?:\s{2,}[A-Z]{2,}){2,}$/.test(line) &&
-            /(?:MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL)/i.test(line)) {
-          customAgency = clean(line)
-          break
-        }
-        // "PRACTICA ADUANAL, S.C." - company name with legal suffix
-        if (/^[A-Z]{2,}.+?(?:S\.?\s*C\.?|S\.?\s*A\.?)$/.test(line) && line.length > 10) {
-          customAgency = clean(line)
-          break
-        }
+    // Pattern B: line-by-line all-caps proper names (Type 1 fallback)
+    const lines = raw.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim()
+      if (/^[A-Z]{2,}(?:\s{2,}[A-Z]{2,}){2,}$/.test(line) &&
+          /(?:MOLINA|GARC[IÍ]A|L[OÓ]PEZ|HERN[ÁA]NDEZ|MART[IÍ]NEZ|RODR[IÍ]GUEZ|GONZ[ÁA]LEZ|P[ÉE]REZ|ESTRELLA|ADUANAL)/i.test(line)) {
+        candidates.push(clean(line))
+      }
+      // Company name with legal suffix on its own line
+      if (/^[A-Z]{2,}.+?(?:S\.?\s*C\.?|S\.?\s*A\.?)$/.test(line) &&
+          line.length > 10 && !line.includes('CERTIFICADO')) {
+        candidates.push(clean(line))
       }
     }
+
+    // Prefer company name (has a legal suffix) over individual name
+    const legalSuffixTest = /(?:S\s*\.?\s*C\s*\.?\s*$|S\s*\.?\s*A\s*\.?\s*$|S\s*\.?\s*DE\s+R\s*\.?\s*L\s*\.?\s*$|SC\s*$|SA\s*$|INC\.?\s*$|LLC\s*$|LTD\.?\s*$|B\.?\s*V\.?\s*$|GMBH\s*$)/i
+    const companyNames = candidates.filter(c => legalSuffixTest.test(c))
+    customAgency = companyNames.length > 0 ? companyNames[companyNames.length - 1] : (candidates.length > 0 ? candidates[0] : '')
   }
 
   // ── 16. Entry date ──
