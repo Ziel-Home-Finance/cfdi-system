@@ -285,18 +285,25 @@ function parseRetencion(retenciones) {
   const fechaExp = getAttr(retenciones, 'FechaExp') || ''
   const fecha = fechaExp || fechaTimbrado || ''
 
-  // Billing period: prefer Periodo element (MesIni + Ejercicio) over date substring
-  let billingPeriod = ''
+  // Billing period (开票期间): derived from FechaExp
+  let billingPeriod = fecha ? fecha.substring(0, 7) : ''
+
+  // Withholding period (预扣期间): from Periodo element
+  // Sheet2 Row 14: if MesIni==MesFin → "Ejercicio-MesIni"
+  //               if MesIni!=MesFin → "Ejercicio-MesIni至MesFin"
+  let withholdingPeriod = ''
   const periodo = get(retenciones, 'Periodo')
   if (periodo) {
     const mesIni = getAttr(periodo, 'MesIni') || ''
+    const mesFin = getAttr(periodo, 'MesFin') || ''
     const ejercicio = getAttr(periodo, 'Ejercicio') || ''
     if (mesIni && ejercicio) {
-      billingPeriod = ejercicio + '-' + mesIni.padStart(2, '0')
+      if (mesIni === mesFin || !mesFin) {
+        withholdingPeriod = ejercicio + '-' + mesIni.padStart(2, '0')
+      } else {
+        withholdingPeriod = ejercicio + '-' + mesIni.padStart(2, '0') + '至' + mesFin.padStart(2, '0')
+      }
     }
-  }
-  if (!billingPeriod) {
-    billingPeriod = fecha ? fecha.substring(0, 7) : ''
   }
 
   // Extract retention details from Totales > ImpRetenidos
@@ -403,6 +410,7 @@ function parseRetencion(retenciones) {
     declare_status: 'pending',
     declared_tax_amount: 0,
     pending_tax_amount: isPlatformCert ? (retencionIVA + retencionISR) : (retencionIVA + retencionISR),
+    withholding_period: isPlatformCert ? withholdingPeriod : '',
     raw_xml: ''
   }
 }

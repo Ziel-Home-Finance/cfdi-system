@@ -515,6 +515,7 @@ const defaultColumns = [
   { prop: 'folio', label: 'Folio', width: 100, sortable: true, filterable: false },
   { prop: 'fecha', label: '开票日期', width: 160, sortable: true, filterable: false },
   { prop: 'billing_period', label: '开票期间', width: 100, sortable: true, filterable: false },
+  { prop: 'withholding_period', label: '预扣期间', width: 100, sortable: true, filterable: false },
   { prop: 'invoice_type', label: '发票类型', width: 90, align: 'center', sortable: true, filterable: true },
   { prop: 'invoice_status', label: '发票状态', width: 90, align: 'center', sortable: true, filterable: true },
   { prop: 'total', label: '含税总额', width: 120, sortable: true, align: 'right', filterable: false },
