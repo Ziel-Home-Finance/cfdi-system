@@ -209,6 +209,17 @@ function parseRegularCFDI(comprobante) {
  * Parse Retencion CFDI (withholding tax receipt)
  * Supports Retencion 1.0 and 2.0 formats
  *
+ * CveRetenc types:
+ *   "26" = plataformasTecnologicas (Platform Withholding Certificate)
+ *     - E-commerce platform withholds ISR/IVA from our company's income
+ *     - Our company (COWIT) is the Receptor; the platform is the Emisor
+ *     - Treated as a withholding CERTIFICATE: ledger_type='withholding_cert', invoice_type='WR'
+ *
+ *   Other values = ordinary withholding receipts
+ *     - Our company withholds tax on behalf of suppliers
+ *     - Our company is the Emisor; supplier is the Receptor
+ *     - Treated as input tax: ledger_type='input', invoice_type='R'
+ *
  * Retencion 2.0 structure (from real TikTok sample):
  *   <retenciones:Retenciones Version="2.0" FolioInt="..." ...>
  *     <retenciones:Emisor RfcE="..." NomDenRazSocE="..." RegimenFiscalE="..." />
@@ -240,6 +251,11 @@ function parseRetencion(retenciones) {
     return null
   }
 
+  // Detect CveRetenc to distinguish platform withholding certificates (26)
+  // from ordinary withholding receipts
+  const cveRetenc = String(getAttr(retenciones, 'CveRetenc') || '')
+  const isPlatformCert = (cveRetenc === '26' || cveRetenc === '26.0')
+
   // Try multiple attribute names for emitter
   const emisor = get(retenciones, 'Emisor') || {}
   const emitterRfc = getAttr(emisor, 'RfcE') || getAttr(emisor, 'Rfc') || ''
@@ -265,9 +281,23 @@ function parseRetencion(retenciones) {
   const uuid = getAttr(tfd, 'UUID') || ''
   const fechaTimbrado = getAttr(tfd, 'FechaTimbrado') || ''
 
-  // Also try FechaExp from root (Retencion 1.0)
-  const fecha = fechaTimbrado || getAttr(retenciones, 'FechaExp') || ''
-  const billingPeriod = fecha ? fecha.substring(0, 7) : ''
+  // Date: prefer FechaExp (issuance date) over FechaTimbrado (stamping date)
+  const fechaExp = getAttr(retenciones, 'FechaExp') || ''
+  const fecha = fechaExp || fechaTimbrado || ''
+
+  // Billing period: prefer Periodo element (MesIni + Ejercicio) over date substring
+  let billingPeriod = ''
+  const periodo = get(retenciones, 'Periodo')
+  if (periodo) {
+    const mesIni = getAttr(periodo, 'MesIni') || ''
+    const ejercicio = getAttr(periodo, 'Ejercicio') || ''
+    if (mesIni && ejercicio) {
+      billingPeriod = ejercicio + '-' + mesIni.padStart(2, '0')
+    }
+  }
+  if (!billingPeriod) {
+    billingPeriod = fecha ? fecha.substring(0, 7) : ''
+  }
 
   // Extract retention details from Totales > ImpRetenidos
   const totales = get(retenciones, 'Totales')
@@ -337,6 +367,11 @@ function parseRetencion(retenciones) {
     description = 'Plataformas Tecnologicas (Withholding)'
   }
 
+  // Override description for platform withholding certificates
+  if (isPlatformCert) {
+    description = 'Platform Withholding Certificate (CveRetenc=26)'
+  }
+
   // Total amount: use MontoTotOperacion (total operation amount) as the "total"
   const total = montoTotOperacion || montoTotGrav || montoTotRet
 
@@ -355,9 +390,9 @@ function parseRetencion(retenciones) {
     receiver_name: receiverName,
     receiver_rfc: receiverRfc,
     description: description,
-    invoice_type: 'R',
+    invoice_type: isPlatformCert ? 'WR' : 'R',
     invoice_status: 'Vigente',
-    ledger_type: 'input',
+    ledger_type: isPlatformCert ? 'withholding_cert' : 'input',
     related_uuid: '',
     relation_type: '',
     retencion_iva: retencionIVA,
@@ -367,7 +402,7 @@ function parseRetencion(retenciones) {
     declare_period: '',
     declare_status: 'pending',
     declared_tax_amount: 0,
-    pending_tax_amount: retencionIVA + retencionISR,
+    pending_tax_amount: isPlatformCert ? (retencionIVA + retencionISR) : (retencionIVA + retencionISR),
     raw_xml: ''
   }
 }

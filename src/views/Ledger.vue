@@ -7,6 +7,7 @@
           <el-radio-button label="">全部</el-radio-button>
           <el-radio-button label="output">销项税</el-radio-button>
           <el-radio-button label="input">进项税</el-radio-button>
+          <el-radio-button label="withholding_cert">代扣代缴证明</el-radio-button>
         </el-radio-group>
 
         <el-date-picker
@@ -224,6 +225,7 @@
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'E')">E (支出)</el-button>
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'P')">P (支付)</el-button>
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'R')">R (代扣)</el-button>
+                    <el-button text size="small" @click="setColumnFilter(col.prop, 'WR')">WR (代扣证明)</el-button>
                   </div>
                   <div v-if="col.prop === 'invoice_status'" class="filter-quick-options">
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'Vigente')">存续</el-button>
@@ -966,7 +968,7 @@ function statusTagType(status) {
 }
 
 function invoiceTypeTagType(type) {
-  const map = { I: 'danger', E: 'success', P: 'info', R: 'warning' }
+  const map = { I: 'danger', E: 'success', P: 'info', R: 'warning', WR: '' }
   return map[type] || 'info'
 }
 
