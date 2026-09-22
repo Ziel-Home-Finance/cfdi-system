@@ -134,9 +134,10 @@
         <el-table-column prop="receiver_name" label="收票人" width="160" show-overflow-tooltip />
         <el-table-column prop="ledger_type" label="类型" width="80" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.ledger_type === 'output' ? 'danger' : 'success'" size="small">
-              {{ row.ledger_type === 'output' ? '销项' : '进项' }}
-            </el-tag>
+            <el-tag v-if="row.ledger_type === 'output'" type="danger" size="small">销项</el-tag>
+            <el-tag v-else-if="row.ledger_type === 'input'" type="success" size="small">进项</el-tag>
+            <el-tag v-else-if="row.ledger_type === 'withholding_cert'" type="warning" size="small">代扣证明</el-tag>
+            <el-tag v-else type="info" size="small">{{ row.ledger_type }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="sap_vendor_code" label="SAP匹配" width="100">
