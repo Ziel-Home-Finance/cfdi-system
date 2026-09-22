@@ -34,8 +34,8 @@ async function getDexie() {
   if (db) return db
   const Dexie = (await import('dexie')).default
   db = new Dexie('CFDIDatabase')
-  db.version(1).stores({
-    invoices: 'uuid, folio, fecha, billing_period, emitter_rfc, receiver_rfc, invoice_type, ledger_type, declare_status, declare_period, sap_vendor_code',
+  db.version(2).stores({
+    invoices: 'uuid, folio, fecha, billing_period, withholding_period, emitter_rfc, receiver_rfc, invoice_type, ledger_type, declare_status, declare_period, sap_vendor_code',
     sap_mapping: '++id, rfc, sap_code, sap_name, partner_type, *keywords',
     views: '++id, name, config, is_default, created_by',
     audit_log: '++id, action, table_name, record_id, old_value, new_value, user_name, timestamp',
