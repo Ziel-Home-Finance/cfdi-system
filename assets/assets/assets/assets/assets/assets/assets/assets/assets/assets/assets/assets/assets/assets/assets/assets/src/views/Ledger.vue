@@ -7,6 +7,7 @@
           <el-radio-button label="">全部</el-radio-button>
           <el-radio-button label="output">销项税</el-radio-button>
           <el-radio-button label="input">进项税</el-radio-button>
+          <el-radio-button label="withholding_cert">代扣代缴证明</el-radio-button>
         </el-radio-group>
 
         <el-date-picker
@@ -224,6 +225,7 @@
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'E')">E (支出)</el-button>
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'P')">P (支付)</el-button>
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'R')">R (代扣)</el-button>
+                    <el-button text size="small" @click="setColumnFilter(col.prop, 'WR')">WR (代扣证明)</el-button>
                   </div>
                   <div v-if="col.prop === 'invoice_status'" class="filter-quick-options">
                     <el-button text size="small" @click="setColumnFilter(col.prop, 'Vigente')">存续</el-button>
@@ -513,6 +515,7 @@ const defaultColumns = [
   { prop: 'folio', label: 'Folio', width: 100, sortable: true, filterable: false },
   { prop: 'fecha', label: '开票日期', width: 160, sortable: true, filterable: false },
   { prop: 'billing_period', label: '开票期间', width: 100, sortable: true, filterable: false },
+  { prop: 'withholding_period', label: '预扣期间', width: 100, sortable: true, filterable: false },
   { prop: 'invoice_type', label: '发票类型', width: 90, align: 'center', sortable: true, filterable: true },
   { prop: 'invoice_status', label: '发票状态', width: 90, align: 'center', sortable: true, filterable: true },
   { prop: 'total', label: '含税总额', width: 120, sortable: true, align: 'right', filterable: false },
@@ -966,7 +969,7 @@ function statusTagType(status) {
 }
 
 function invoiceTypeTagType(type) {
-  const map = { I: 'danger', E: 'success', P: 'info', R: 'warning' }
+  const map = { I: 'danger', E: 'success', P: 'info', R: 'warning', WR: '' }
   return map[type] || 'info'
 }
 
