@@ -1,0 +1,41 @@
+name: Keep CFDI Supabase awake
+
+on:
+  schedule:
+    # 01:00 UTC = 09:00 China Standard Time; runs on the 1st, 5th, 9th, etc. of each month.
+    - cron: "0 1 */4 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    name: Query CFDI ledger health endpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required secrets
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          test -n "$SUPABASE_URL" || { echo "Missing VITE_SUPABASE_URL repository secret."; exit 1; }
+          test -n "$SUPABASE_ANON_KEY" || { echo "Missing VITE_SUPABASE_ANON_KEY repository secret."; exit 1; }
+
+      - name: Run read-only ledger request
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          curl --fail --silent --show-error \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --retry 2 \
+            --retry-all-errors \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Accept: application/json" \
+            "$SUPABASE_URL/rest/v1/invoices?select=uuid&limit=1" \
+            -o /dev/null
+          echo "CFDI Supabase read-only health check succeeded."
