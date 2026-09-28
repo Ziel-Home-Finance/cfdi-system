@@ -11,6 +11,7 @@
           <el-radio-button label="">全部</el-radio-button>
           <el-radio-button label="output">销项税</el-radio-button>
           <el-radio-button label="input">进项税</el-radio-button>
+          <el-radio-button label="withholding_cert">代扣代缴证明</el-radio-button>
         </el-radio-group>
       </div>
     </el-card>
